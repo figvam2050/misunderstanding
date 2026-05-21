@@ -21,17 +21,6 @@ def setup_logging() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # ── Rotating file handler (5 MB × 3 backups) ───────────────────────────
-    log_path = Path(config.LOG_FILE)
-    file_handler = logging.handlers.RotatingFileHandler(
-        filename=log_path,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=3,
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(fmt)
-    file_handler.setLevel(log_level)
-
     # ── Console handler ─────────────────────────────────────────────────────
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
@@ -40,8 +29,25 @@ def setup_logging() -> None:
     # ── Root logger ─────────────────────────────────────────────────────────
     root = logging.getLogger()
     root.setLevel(log_level)
-    root.addHandler(file_handler)
     root.addHandler(console_handler)
+
+    # ── Rotating file handler (5 MB × 3 backups) ───────────────────────────
+    try:
+        log_path = Path(config.LOG_FILE)
+        file_handler = logging.handlers.RotatingFileHandler(
+            filename=log_path,
+            maxBytes=5 * 1024 * 1024,  # 5 MB
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(fmt)
+        file_handler.setLevel(log_level)
+        root.addHandler(file_handler)
+    except Exception as exc:
+        root.warning(
+            "Failed to setup file logging (%s). Falling back to console-only logging.",
+            exc,
+        )
 
     # Suppress noisy third-party loggers
     logging.getLogger("websockets").setLevel(logging.WARNING)

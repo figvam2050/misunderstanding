@@ -120,9 +120,24 @@ class GridStrategy:
 
     async def _place_grid_orders(self) -> None:
         """Place virtual pending orders for all active grid levels."""
+        # Calculate how much base asset (BTC) is currently available for new sell orders
+        # (total balance minus base asset already committed to pending sell orders)
+        open_orders = await db.get_open_orders()
+        committed_base = sum(order["qty"] for order in open_orders if order["side"] == "sell")
+        available_base = self._portfolio.balance_base - committed_base
+
         for lvl in self._grid:
             if not lvl["active"] or lvl["pending"] or lvl["order_id"] is not None:
                 continue
+
+            # In spot trading, we cannot place sell orders unless we own the base asset (BTC)
+            if lvl["side"] == "sell":
+                if available_base >= config.ORDER_SIZE:
+                    available_base -= config.ORDER_SIZE
+                else:
+                    # Skip placing this sell order since we don't have enough BTC
+                    continue
+
             order_id = await self._om.place_order(
                 side=lvl["side"],
                 price=lvl["price"],
@@ -275,6 +290,83 @@ class GridStrategy:
                 logger.info("Resuming grid from saved center: %.2f", center_price)
             except ValueError:
                 pass
+
+        # AUTOMATIC INITIAL MARKET BUY IF BASE BALANCE IS INSUFFICIENT
+        required_base = config.GRID_LEVELS * config.ORDER_SIZE
+        missing_base = required_base - self._portfolio.balance_base
+
+        if missing_base > 0:
+            logger.info(
+                "Base balance %.6f BTC is less than required %.6f BTC for grid SELL levels.",
+                self._portfolio.balance_base,
+                required_base,
+            )
+            # Estimate cost: price * qty * (1 + slippage + taker_fee)
+            estimated_price = center_price * (1 + config.SLIPPAGE_PCT)
+            estimated_cost = estimated_price * missing_base * (1 + config.TAKER_FEE)
+
+            if estimated_cost > self._portfolio.balance_quote:
+                max_cost_allowed = self._portfolio.balance_quote
+                max_qty = max_cost_allowed / (estimated_price * (1 + config.TAKER_FEE))
+                
+                # Determine precision decimals from ORDER_STEP
+                decimals = 0
+                step = config.ORDER_STEP
+                while step < 1.0 - 1e-9:
+                    step *= 10.0
+                    decimals += 1
+                    if decimals > 10:
+                        break
+                
+                factor = 10 ** decimals
+                max_qty = int(max_qty * factor) / factor
+                
+                logger.warning(
+                    "Insufficient quote balance (%.2f USDT) to buy required %.6f BTC. "
+                    "Adjusting initial buy quantity to %.6f BTC.",
+                    self._portfolio.balance_quote,
+                    missing_base,
+                    max_qty,
+                )
+                missing_base = max_qty
+
+            # Round missing_base to decimals
+            decimals = 0
+            step = config.ORDER_STEP
+            while step < 1.0 - 1e-9:
+                step *= 10.0
+                decimals += 1
+                if decimals > 10:
+                    break
+            missing_base = round(missing_base, decimals)
+
+            if missing_base >= config.MIN_ORDER_SIZE:
+                logger.info(
+                    "Executing initial market buy of %.6f BTC at %.2f USDT.",
+                    missing_base,
+                    center_price,
+                )
+                order_id = await self._om.place_order(
+                    side="buy",
+                    price=center_price,
+                    qty=missing_base,
+                    grid_level=0,  # 0 indicates startup/initial buy
+                )
+                await self._om.fill_order(
+                    order_id=order_id,
+                    intended_price=center_price,
+                    qty=missing_base,
+                    side="buy",
+                    grid_level=0,
+                    is_maker=False,  # market orders are takers
+                )
+            else:
+                logger.warning(
+                    "Initial buy quantity %.6f BTC is less than minimum order size %.6f BTC. "
+                    "Skipping initial buy.",
+                    missing_base,
+                    config.MIN_ORDER_SIZE,
+                )
 
         self._build_grid(center_price)
         await self._place_grid_orders()
