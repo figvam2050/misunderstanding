@@ -12,6 +12,7 @@ Usage
 -----
     python main.py
 """
+import argparse
 import asyncio
 import logging
 import os
@@ -63,7 +64,7 @@ def fetch_center_price() -> float:
         return fallback
 
 
-async def main() -> None:
+async def main(reset: bool = False) -> None:
     """Main async entry point."""
     logger.info("=" * 60)
     logger.info("DCA/Grid Paper Trading Bot starting...")
@@ -138,7 +139,9 @@ async def main() -> None:
 
         # 1. Initialize database
         await db.init_db()
-        await db.reset_db()
+        if reset:
+            await db.reset_db()
+            logger.info("Database reset requested via --reset flag. All history cleared.")
 
         # 2. Initialize portfolio engine (restores from DB)
         portfolio = PortfolioEngine()
@@ -223,7 +226,14 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="DCA/Grid Paper Trading Bot")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Clear all trade history and reset balances to initial values before starting.",
+    )
+    args = parser.parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(reset=args.reset))
     except KeyboardInterrupt:
         sys.exit(0)

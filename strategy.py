@@ -291,82 +291,25 @@ class GridStrategy:
             except ValueError:
                 pass
 
-        # AUTOMATIC INITIAL MARKET BUY IF BASE BALANCE IS INSUFFICIENT
+        # INITIAL SELL-SIDE COVERAGE CHECK
+        # If we don't have enough BTC for sell levels, don't force a costly market buy.
+        # Instead, we start in buy-only mode: only buy orders are placed initially.
+        # As buy orders fill, opposing sell orders will be placed automatically.
         required_base = config.GRID_LEVELS * config.ORDER_SIZE
-        missing_base = required_base - self._portfolio.balance_base
+        current_base = self._portfolio.balance_base
 
-        if missing_base > 0:
+        if current_base < required_base:
             logger.info(
-                "Base balance %.6f BTC is less than required %.6f BTC for grid SELL levels.",
-                self._portfolio.balance_base,
+                "Base balance %.6f BTC < required %.6f BTC for all sell levels. "
+                "Starting in buy-only mode — sell orders will appear as buys fill.",
+                current_base,
                 required_base,
             )
-            # Estimate cost: price * qty * (1 + slippage + taker_fee)
-            estimated_price = center_price * (1 + config.SLIPPAGE_PCT)
-            estimated_cost = estimated_price * missing_base * (1 + config.TAKER_FEE)
-
-            if estimated_cost > self._portfolio.balance_quote:
-                max_cost_allowed = self._portfolio.balance_quote
-                max_qty = max_cost_allowed / (estimated_price * (1 + config.TAKER_FEE))
-                
-                # Determine precision decimals from ORDER_STEP
-                decimals = 0
-                step = config.ORDER_STEP
-                while step < 1.0 - 1e-9:
-                    step *= 10.0
-                    decimals += 1
-                    if decimals > 10:
-                        break
-                
-                factor = 10 ** decimals
-                max_qty = int(max_qty * factor) / factor
-                
-                logger.warning(
-                    "Insufficient quote balance (%.2f USDT) to buy required %.6f BTC. "
-                    "Adjusting initial buy quantity to %.6f BTC.",
-                    self._portfolio.balance_quote,
-                    missing_base,
-                    max_qty,
-                )
-                missing_base = max_qty
-
-            # Round missing_base to decimals
-            decimals = 0
-            step = config.ORDER_STEP
-            while step < 1.0 - 1e-9:
-                step *= 10.0
-                decimals += 1
-                if decimals > 10:
-                    break
-            missing_base = round(missing_base, decimals)
-
-            if missing_base >= config.MIN_ORDER_SIZE:
-                logger.info(
-                    "Executing initial market buy of %.6f BTC at %.2f USDT.",
-                    missing_base,
-                    center_price,
-                )
-                order_id = await self._om.place_order(
-                    side="buy",
-                    price=center_price,
-                    qty=missing_base,
-                    grid_level=0,  # 0 indicates startup/initial buy
-                )
-                await self._om.fill_order(
-                    order_id=order_id,
-                    intended_price=center_price,
-                    qty=missing_base,
-                    side="buy",
-                    grid_level=0,
-                    is_maker=False,  # market orders are takers
-                )
-            else:
-                logger.warning(
-                    "Initial buy quantity %.6f BTC is less than minimum order size %.6f BTC. "
-                    "Skipping initial buy.",
-                    missing_base,
-                    config.MIN_ORDER_SIZE,
-                )
+        else:
+            logger.info(
+                "Base balance %.6f BTC is sufficient. Full grid (buys + sells) will be placed.",
+                current_base,
+            )
 
         self._build_grid(center_price)
         await self._place_grid_orders()

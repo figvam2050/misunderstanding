@@ -58,21 +58,33 @@ class PortfolioEngine:
     # ── Initialization ────────────────────────────────────────────────────────
 
     async def load_from_db(self) -> None:
-        """Restore balances from persisted state."""
-        balances = await db.get_all_balances()
-        self._balance_quote = balances.get("QUOTE", config.INITIAL_BALANCE_QUOTE)
-        self._balance_base = balances.get("BASE", config.INITIAL_BALANCE_BASE)
+        """Restore balances and position stats from persisted state.
 
-        # Reconstruct position from trade history
+        IMPORTANT: Balances (quote/base) are loaded directly from the DB snapshot
+        because they were already updated after every trade.
+        Trade history is replayed ONLY to reconstruct position tracking stats
+        (avg_cost, position_qty, realized_pnl, etc.) without touching balances.
+        This avoids the double-application bug.
+        """
+        # Step 1: Load the authoritative balance snapshot from DB
+        balances = await db.get_all_balances()
+        restored_quote = balances.get("QUOTE", config.INITIAL_BALANCE_QUOTE)
+        restored_base = balances.get("BASE", config.INITIAL_BALANCE_BASE)
+
+        # Step 2: Replay trades to reconstruct position stats ONLY (no balance changes)
         trades = await db.get_all_trades()
         for trade in trades:
-            await self._apply_trade(
+            self._replay_trade_stats(
                 side=trade["side"],
                 qty=trade["qty"],
                 fill_price=trade["fill_price"],
                 fee=trade["fee"],
-                persist=False,  # already in DB
             )
+
+        # Step 3: Restore the authoritative balances from DB (overwrite any accidental changes)
+        self._balance_quote = restored_quote
+        self._balance_base = restored_base
+
         logger.info(
             "Portfolio restored | quote=%.2f | base=%.6f | avg_cost=%.2f | rpnl=%.4f",
             self._balance_quote,
@@ -80,6 +92,41 @@ class PortfolioEngine:
             self._avg_cost,
             self._realized_pnl,
         )
+
+    def _replay_trade_stats(
+        self,
+        side: str,
+        qty: float,
+        fill_price: float,
+        fee: float,
+    ) -> None:
+        """Replay a historical trade to reconstruct position tracking stats.
+
+        This method updates ONLY:
+            _position_qty, _avg_cost, _realized_pnl, _total_fees,
+            _winning_trades, _losing_trades
+
+        It does NOT modify _balance_quote or _balance_base — those come
+        directly from the DB snapshot to avoid double-application.
+        """
+        self._total_fees += fee
+
+        if side == "buy":
+            total_cost = self._avg_cost * self._position_qty + fill_price * qty
+            self._position_qty += qty
+            self._avg_cost = total_cost / self._position_qty if self._position_qty else 0.0
+        else:  # sell
+            realized_pnl = (fill_price - self._avg_cost) * qty - fee
+            self._realized_pnl += realized_pnl
+
+            if realized_pnl >= 0:
+                self._winning_trades += 1
+            else:
+                self._losing_trades += 1
+
+            self._position_qty = max(0.0, self._position_qty - qty)
+            if self._position_qty == 0:
+                self._avg_cost = 0.0
 
     # ── Core trade recording ─────────────────────────────────────────────────
 
