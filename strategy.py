@@ -301,7 +301,7 @@ class GridStrategy:
         if current_base < required_base:
             logger.info(
                 "Base balance %.6f BTC < required %.6f BTC for all sell levels. "
-                "Starting in buy-only mode — sell orders will appear as buys fill.",
+                "Placing as many sell orders as possible, remaining will appear as buys fill.",
                 current_base,
                 required_base,
             )

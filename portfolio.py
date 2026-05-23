@@ -112,7 +112,7 @@ class PortfolioEngine:
         self._total_fees += fee
 
         if side == "buy":
-            total_cost = self._avg_cost * self._position_qty + fill_price * qty
+            total_cost = self._avg_cost * self._position_qty + fill_price * qty + fee
             self._position_qty += qty
             self._avg_cost = total_cost / self._position_qty if self._position_qty else 0.0
         else:  # sell
@@ -172,8 +172,8 @@ class PortfolioEngine:
                 )
                 # Clamp — paper trading, so we allow it but log warning
             self._balance_quote -= cost + fee
-            # Update weighted average cost
-            total_cost = self._avg_cost * self._position_qty + fill_price * qty
+            # Update weighted average cost (include fee in the cost basis)
+            total_cost = self._avg_cost * self._position_qty + fill_price * qty + fee
             self._position_qty += qty
             self._avg_cost = total_cost / self._position_qty if self._position_qty else 0.0
             self._balance_base += qty
