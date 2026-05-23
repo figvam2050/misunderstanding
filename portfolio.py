@@ -116,7 +116,8 @@ class PortfolioEngine:
             self._position_qty += qty
             self._avg_cost = total_cost / self._position_qty if self._position_qty else 0.0
         else:  # sell
-            realized_pnl = (fill_price - self._avg_cost) * qty - fee
+            covered_qty = min(qty, self._position_qty)
+            realized_pnl = (fill_price - self._avg_cost) * covered_qty - fee
             self._realized_pnl += realized_pnl
 
             if realized_pnl >= 0:
@@ -189,7 +190,8 @@ class PortfolioEngine:
             self._balance_base -= qty
 
             # Realized PnL
-            realized_pnl = (fill_price - self._avg_cost) * qty - fee
+            covered_qty = min(qty, self._position_qty)
+            realized_pnl = (fill_price - self._avg_cost) * covered_qty - fee
             self._realized_pnl += realized_pnl
 
             if realized_pnl >= 0:
